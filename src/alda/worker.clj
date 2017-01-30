@@ -1,7 +1,7 @@
 (ns alda.worker
   (:require [alda.now        :as    now]
             [alda.parser     :refer (parse-input)]
-            [alda.parser-util :refer (parse-to-events-with-context)]
+            [alda.parser-util :refer (parse-to-events-with-context parse-to-map-with-context)]
             [alda.lisp.score :refer (continue)]
             [alda.sound      :as    sound :refer (*play-opts*)]
             [alda.sound.midi :as    midi]
@@ -52,25 +52,36 @@
     (reset! current-status :parsing)
     (log/debug "Requiring alda.lisp...")
     (require '[alda.lisp :refer :all])
-    (let [[context score] (do
-                            (log/debug "Parsing body...")
-                            (parse-to-events-with-context code))
+    (let [[score-context score] (do
+                                  (log/debug "Parsing body...")
+                                  (parse-to-events-with-context code))
           ;; if history was nil, make it empty string
           history (or history "")
           ;; Parse and remove events
-          history (-> (try
-                        (log/debug "Parsing history...")
-                        (parse-input history :map)
-                        (catch Throwable e
-                          {:error e}))
-                      (dissoc :events))]
-      (if-let [error (or (when (= :parse-failure context) score) (:error history))]
+          [history-context history] (do
+                                      (log/debug "Parsing history...")
+                                      (parse-to-map-with-context history))
+          ;; parse-to-map-with-context returns an empty list if we pass in an empty string.
+          ;; this sequence uses the parse input default if we have that case
+          x (log/info history)
+          x (log/info (pr-str score))
+          history (if (not (or (not history) (empty? history)))
+                    (dissoc history :events)
+                    (parse-input "" :map))
+          ;; TODO not sure if this is needed
+          history (assoc history :parsing-context history-context)
+          ]
+      (log/info history)
+      (log/info (pr-str score))
+      (if-let [error (or (when (= :parse-failure score-context) score)
+                         (when (= :parse-failure history-context) history))]
         (do
           (log/error error error)
           (reset! current-status :error)
           (reset! current-error error))
         (try
           (let [score (continue history score)]
+            (log/info score)
             (log/debug "Playing score...")
             (reset! current-status :playing)
             (now/play-score! score {:async? false :one-off? false})
